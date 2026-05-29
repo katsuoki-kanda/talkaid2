@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Mesh Talking Aid - Remote Sender (配色・レイアウト完全統一版)</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+            font-size: 150%; 
+        }
+        #ui-layer {
+            position: absolute;
+            bottom: 5px;
+            right: 15px;
+            z-index: 100;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 4px 12px;
+            border-radius: 15px;
+            pointer-events: none;
+            font-size: 40%;
+            display: flex;
+            gap: 15px;
+            white-space: nowrap;
+        }
+        canvas#output_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 1;
+        }
+
+        video#input_video {
+            display: none;
+        }
+        
+        /* 内部処理用の仮想カーソル（非表示） */
+        #virtual-cursor {
+            display: none;
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: rgba(255, 0, 0, 0.8);
+            border: 2px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        
+        #talking-aid-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            bottom: 30px; 
+            background: rgba(255, 255, 255, 0.3); 
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+        #textarea {
+            width: 100%;
+            height: 130px;
+            font-size: 37px; 
+            border: 2px solid rgba(0, 0, 0, 0.2); 
+            border-radius: 8px;
+            padding: 10px 15px;
+            box-sizing: border-box;
+            background: rgba(255, 255, 255, 0.8); 
+            color: black;
+            resize: none;
+            overflow-y: auto;
+            cursor: pointer;
+            transition: background-color 0.05s, border-color 0.05s;
+        }
+        
+        #suggestion-overlay {
+            position: absolute;
+            top: 145px; 
+            left: 15px;
+            right: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 20;
+            pointer-events: none;
+        }
+        
+        /* 【修正】入力候補の表示窓の初期カラーを「水色」に設定 */
+        .suggestion-item {
+            background: rgba(0, 210, 255, 0.95) !important; 
+            color: #000000 !important;
+            padding: 8px 15px; 
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 105%; 
+            border: 2px solid #008bbb !important; 
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 2px 2px 8px rgba(0,0,0,0.3);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* 予測を閉じるボタン（初期状態は視認性の高いダークカラー） */
+        .suggestion-cancel {
+            background: #333333 !important;
+            color: #ffffff !important;
+            text-align: center;
+            font-size: 85% !important;
+            padding: 6px !important;
+            margin-bottom: 2px;
+            border: 2px solid #555555 !important;
+        }
+
+        #keyboard-grid {
+            display: grid;
+            grid-template-columns: repeat(11, 1fr);
+            grid-template-rows: repeat(6, 1fr);
+            gap: 5px;
+            flex: 1;
+            position: relative;
+        }
+        .key {
+            background: rgba(255, 255, 255, 0.7); 
+            border: 1px solid rgba(0, 0, 0, 0.1); 
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 140%;
+            font-weight: bold;
+            color: #000;
+            box-sizing: border-box;
+            backdrop-filter: blur(2px);
+            transition: background-color 0.05s, border-color 0.05s;
+        }
+        
+        /* 【修正】文字キーが選択された時は「黄色」ハイライト（太さ1px維持） */
+        .key.key-hover-active {
+            background-color: #ffff00 !important;
+            color: #000000 !important;
+            border: 1px solid #ff0000 !important; 
+            z-index: 5;
+        }
+
+        /* 【修正】入力表示欄が選択された時も「黄色」ハイライト（太さ2px維持） */
+        #textarea.key-hover-active {
+            background-color: #ffff00 !important;
+            color: #000000 !important;
+            border: 2px solid #ff0000 !important; 
+            z-index: 5;
+        }
+
+        /* 【修正】入力候補が選択された時も「黄色」ハイライトへと完全に統一（太さ2px維持） */
+        .suggestion-item.suggestion-hover-active {
+            background-color: #ffff00 !important;
+            color: #000000 !important;
+            border: 2px solid #ff0000 !important; 
+        }
+
+        .key-special {
+            background: rgba(253, 246, 242, 0.8);
+            color: #b7574a;
+            font-size: 90%;
+        }
+        .key-active {
+            background: #28a745 !important; 
+            color: #fff !important;
+        }
+        
+        .key-dull {
+            color: #b7574a;
+            font-size: 140% !important; 
+            line-height: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="status">システム起動中...</div>
+        <div id="mode-display">モード: 待機</div>
+    </div>
+
+    <div id="virtual-cursor"></div>
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="talking-aid-container">
+        <textarea id="textarea" readonly placeholder="入力待ち"></textarea>
+        
+        <div id="suggestion-overlay"></div>
+
+        <div id="keyboard-grid">
+            <div class="key key-special">話す</div>
+            <div class="key">あ</div> <div class="key">か</div> <div class="key">さ</div> <div class="key">た</div> <div class="key">な</div> <div class="key">は</div> <div class="key">ま</div> <div class="key">や</div> <div class="key">ら</div> <div class="key">わ</div>
+            
+            <div class="key key-special">一字消</div>
+            <div class="key">い</div> <div class="key">き</div> <div class="key">し</div> <div class="key">ち</div> <div class="key">に</div> <div class="key">ひ</div> <div class="key">み</div> <div class="key">、</div> <div class="key">り</div> <div class="key">を</div>
+            
+            <div class="key key-special">全消去</div>
+            <div class="key">う</div> <div class="key">く</div> <div class="key">す</div> <div class="key">つ</div> <div class="key">ぬ</div> <div class="key">ふ</div> <div class="key">む</div> <div class="key">ゆ</div> <div class="key">る</div> <div class="key">ん</div>
+            
+            <div class="key key-special key-dull">゛</div>
+            <div class="key">え</div> <div class="key">け</div> <div class="key">せ</div> <div class="key">て</div> <div class="key">ね</div> <div class="key">へ</div> <div class="key">め</div> <div class="key">。</div> <div class="key">れ</div> <div class="key key-special">空白</div>
+            
+            <div class="key key-special key-dull">゜</div>
+            <div class="key">お</div> <div class="key">こ</div> <div class="key">そ</div> <div class="key">と</div> <div class="key">の</div> <div class="key">ほ</div> <div class="key">も</div> <div class="key">よ</div> <div class="key">ろ</div> <div class="key key-special">小文字</div>
+            
+            <div class="key">1</div> <div class="key">2</div> <div class="key">3</div> <div class="key">4</div> <div class="key">5</div> <div class="key">6</div> <div class="key">7</div> <div class="key">8</div> <div class="key">9</div> <div class="key">0</div> 
+            <div class="key key-special" id="btn-send">送信</div>
+        </div>
+    </div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.10.0/firebase-app.js";
+import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/10.10.0/firebase-database.js";
+
+const firebaseConfig = {
+   apiKey: "AIzaSyDTCv2WjsAB_IqoPQtW-cc8gVbtagQyDOU",
+   authDomain: "tuusin-4b511.firebaseapp.com",
+   databaseURL: "https://tuusin-4b511-default-rtdb.firebaseio.com",
+   projectId: "tuusin-4b511",
+   storageBucket: "tuusin-4b511.firebasestorage.app",
+   messagingSenderId: "816051060583",
+   appId: "1:816051060583:web:63758834a1fd18c7f879c2",
+   measurementId: "G-R8Q5H0JE4G"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const videoElement = document.getElementById('input_video');
+const canvasElement = document.getElementById('output_canvas');
+const canvasCtx = canvasElement.getContext('2d');
+const cursorElement = document.getElementById('virtual-cursor');
+const statusDiv = document.getElementById('status');
+const modeDiv = document.getElementById('mode-display');
+const textarea = document.getElementById('textarea');
+const suggestionOverlay = document.getElementById('suggestion-overlay');
+
+const SENSITIVITY = 4;
+const ACTION_COOL_DOWN = 500; 
+const MODE_HOLD_DURATION = 150; 
+
+let lastActionTime = 0;
+let eyebrowRaiseStartTime = null; 
+
+let ch = 0; 
+let isCalibrated = false;
+let calibrationData = {};
+let virtualMouse = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+
+const HISTORY_KEY = 'talking_aid_history';
+let phraseHistory = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+
+const dakutenMap = {'あ':'あ','い':'い','う':'う','え':'え','お':'お','か':'が','き':'ぎ','く':'ぐ','け':'げ','こ':'ご','さ':'ざ','し':'じ','す':'ず','せ':'ぜ','そ':'ぞ','た':'だ','ち':'ぢ','つ':'づ','て':'で','と':'ど','は':'ば','ひ':'び','ふ':'ぶ','へ':'べ','ほ':'ぼ','が':'か','ぎ':'き','ぐ':'く','げ':'け','ご':'こ','ざ':'さ','じ':'し','ず':'す','ぜ':'ぜ','ぞ':'そ','だ':'た','ぢ':'ち','づ':'つ','て':'で','と':'ど','ば':'は','び':'ひ','ぶ':'ふ','べ':'へ','ぼ':'ほ'};
+const handakutenMap = {'は':'ぱ','ひ':'ぴ','ふ':'ぷ','へ':'ぺ','ほ':'ぽ','ば':'ぱ','び':'ぴ','ぶ':'ぷ','べ':'ぺ','ぼ':'ほ','ぱ':'は','ぴ':'ひ','ぷ':'ふ','ぺ':'へ','ぽ':'ほ'};
+const smallMap = {'あ':'ぁ','い':'ぃ','う':'ぅ','え':'ぇ','お':'ぉ','つ':'っ','や':'ゃ','ゆ':'ゅ','よ':'よ','わ':'ゎ','ぁ':'あ','ぃ':'い','う':'う','ぇ':'え','ぉ':'お','っ':'つ','ゃ':'や','ゅ':'ゆ','ょ':'よ','ゎ':'わ'};
+
+function saveToHistory(text) {
+    if(!text || text.trim().length === 0) return;
+    phraseHistory = phraseHistory.filter(item => item !== text); 
+    phraseHistory.unshift(text); 
+    if(phraseHistory.length > 100) phraseHistory.pop(); 
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(phraseHistory));
+}
+
+function updateSuggestions() {
+    const input = textarea.value;
+    suggestionOverlay.innerHTML = '';
+    
+    if (input.length === 0) return;
+
+    const matches = phraseHistory
+        .filter(phrase => phrase.startsWith(input) && phrase !== input)
+        .slice(0, 5);
+
+    if (matches.length > 0) {
+        const cancelBtn = document.createElement('div');
+        cancelBtn.className = 'suggestion-item suggestion-cancel';
+        cancelBtn.innerText = '× 予測を閉じて 50音表を使う';
+        cancelBtn.addEventListener('click', () => {
+            suggestionOverlay.innerHTML = ''; 
+        });
+        suggestionOverlay.appendChild(cancelBtn);
+
+        matches.forEach(match => {
+            const div = document.createElement('div');
+            div.className = 'suggestion-item';
+            div.innerText = match;
+            div.addEventListener('click', () => {
+                textarea.value = match;
+                saveToHistory(match); 
+                speak(match);
+                suggestionOverlay.innerHTML = ''; 
+            });
+            suggestionOverlay.appendChild(div);
+        });
+    }
+}
+
+function speak(text) {
+    if(!text) return;
+    const uttr = new SpeechSynthesisUtterance(text);
+    uttr.lang = 'ja-JP';
+    window.speechSynthesis.speak(uttr);
+}
+
+function beep(freq = 800, duration = 50) {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    oscillator.connect(audioCtx.destination);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + duration / 1000);
+}
+
+// 描画同期ループ（Animation Loop）でブレなく正確にハイライトを制御する
+function drawLoop() {
+    const checkX = Math.max(1, Math.min(window.innerWidth - 2, virtualMouse.x));
+    const checkY = Math.max(1, Math.min(window.innerHeight - 2, virtualMouse.y));
+
+    const targetedElement = document.elementFromPoint(checkX, checkY);
+
+    // 全てのホバー用のアクティブクラスを一斉クリア
+    document.querySelectorAll('.key').forEach(el => el.classList.remove('key-hover-active'));
+    document.querySelectorAll('.suggestion-item').forEach(el => el.classList.remove('suggestion-hover-active'));
+    textarea.classList.remove('key-hover-active');
+
+    if (targetedElement) {
+        const keyElement = targetedElement.closest('.key');
+        const suggestionElement = targetedElement.closest('.suggestion-item');
+        const textElement = targetedElement.closest('#textarea');
+
+        if (keyElement) {
+            keyElement.classList.add('key-hover-active');
+        } else if (suggestionElement) {
+            suggestionElement.classList.add('suggestion-hover-active');
+        } else if (textElement) {
+            textElement.classList.add('key-hover-active'); // 入力欄をくっきり黄色くハイライト
+        }
+    }
+    requestAnimationFrame(drawLoop);
+}
+// ループ起動
+requestAnimationFrame(drawLoop);
+
+function onResults(results) {
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        const landmarks = results.multiFaceLandmarks[0];
+        
+        if (!isCalibrated) {
+            statusDiv.innerText = "登録中...";
+            calibrationData = {
+                noseOffset: { x: 0.5 - landmarks[1].x, y: 0.5 - landmarks[1].y },
+                faceH: landmarks[152].y - landmarks[10].y,
+                faceW: landmarks[454].x - landmarks[234].x,
+                upperFaceH: landmarks[5].y - landmarks[10].y,
+                lowerFaceH: landmarks[152].y - landmarks[5].y,
+                mouthW: landmarks[409].x - landmarks[185].x,
+                mouthH2: landmarks[16].y - landmarks[11].y,
+                eyebrowDist: ((landmarks[159].y - landmarks[105].y) + (landmarks[386].y - landmarks[334].y)) / 2
+            };
+            isCalibrated = true;
+            speak("登録完了");
+            canvasCtx.restore();
+            return;
+        }
+
+        const now = performance.now();
+        const currentFaceH = landmarks[152].y - landmarks[10].y;
+        const currentFaceW = landmarks[454].x - landmarks[234].x;
+        const hirituY = currentFaceH / calibrationData.faceH;
+        const hirituX = currentFaceW / calibrationData.faceW;
+        const mouthHH = (calibrationData.upperFaceH / calibrationData.lowerFaceH) / ((landmarks[5].y - landmarks[10].y) / (landmarks[152].y - landmarks[5].y));
+
+        // talksend本来の上下左右常時移動追従ロジック
+        if (ch === 0) {
+            modeDiv.innerText = "モード: オート";
+            const targetX = (landmarks[1].x + calibrationData.noseOffset.x) * window.innerWidth * SENSITIVITY;
+            const targetY = (landmarks[1].y + calibrationData.noseOffset.y) * window.innerHeight * SENSITIVITY;
+            virtualMouse.x = window.innerWidth - (targetX - 0.5 * window.innerWidth * (SENSITIVITY - 1));
+            virtualMouse.y = targetY - 0.5 * window.innerHeight * (SENSITIVITY - 1);
+        } else {
+            modeDiv.innerText = "モード: きりかえ";
+            const speed = 6; 
+            if ((landmarks[454].x - landmarks[5].x) < (calibrationData.faceW * 0.4 * hirituX)) virtualMouse.x -= speed;
+            if ((landmarks[5].x - landmarks[234].x) < (calibrationData.faceW * 0.4 * hirituX)) virtualMouse.x += speed;
+            if (mouthHH < 0.88) virtualMouse.y += speed; 
+            if (mouthHH > 1.12) virtualMouse.y -= speed; 
+        }
+
+        virtualMouse.x = Math.max(0, Math.min(window.innerWidth - 1, virtualMouse.x));
+        virtualMouse.y = Math.max(0, Math.min(window.innerHeight - 1, virtualMouse.y));
+
+        cursorElement.style.left = `${virtualMouse.x}px`;
+        cursorElement.style.top = `${virtualMouse.y}px`;
+
+        if (now - lastActionTime > ACTION_COOL_DOWN) {
+            const currentMouthOpen = landmarks[16].y - landmarks[11].y;
+            const currentMouthWidth = landmarks[409].x - landmarks[185].x;
+            const currentEyebrowDist = ((landmarks[159].y - landmarks[105].y) + (landmarks[386].y - landmarks[334].y)) / 2;
+
+            if (currentEyebrowDist > calibrationData.eyebrowDist * 1.4) {
+                if (eyebrowRaiseStartTime === null) {
+                    eyebrowRaiseStartTime = now;
+                } else if (now - eyebrowRaiseStartTime > MODE_HOLD_DURATION) {
+                    ch = ch === 0 ? 1 : 0;
+                    speak(ch === 0 ? "オート" : "切り替え");
+                    lastActionTime = now;
+                    eyebrowRaiseStartTime = null; 
+                }
+            } else {
+                eyebrowRaiseStartTime = null; 
+            }
+
+            // 口開けによる決定クリック判定
+            if (now - lastActionTime > ACTION_COOL_DOWN) {
+                if (currentMouthOpen > (calibrationData.mouthH2 * 1.875) * hirituY * Math.min(mouthHH, 1.2) || 
+                    currentMouthWidth < calibrationData.mouthW * 0.5 * hirituX * hirituY) {
+                    
+                    beep(500, 80);
+                    const checkX = Math.max(1, Math.min(window.innerWidth - 2, virtualMouse.x));
+                    const checkY = Math.max(1, Math.min(window.innerHeight - 2, virtualMouse.y));
+                    const el = document.elementFromPoint(checkX, checkY);
+                    
+                    if (el) {
+                        const targetKey = el.closest('.key');
+                        const targetSug = el.closest('.suggestion-item');
+                        const targetText = el.closest('#textarea');
+
+                        if (targetKey) targetKey.click();
+                        else if (targetSug) targetSug.click();
+                        else if (targetText) targetText.click(); // 入力表示欄クリック時に発火
+                        else el.click();
+                    }
+                    lastActionTime = now;
+                }
+            }
+            statusDiv.innerText = "準備完了";
+        } else {
+            statusDiv.innerText = "待機中...";
+        }
+    }
+    canvasCtx.restore();
+}
+
+// 「話す」ための共通処理
+function executeSpeakAction() {
+    const currentText = textarea.value;
+    if (currentText) {
+        saveToHistory(currentText); 
+        speak(currentText);         
+        suggestionOverlay.innerHTML = ''; 
+    }
+}
+
+function addKeyListeners() {
+    // 入力表示欄を選択（クリック）した時、共通の「話す」処理を走らせる
+    textarea.addEventListener('click', () => {
+        executeSpeakAction();
+    });
+
+    document.querySelectorAll('.key').forEach(key => {
+        key.addEventListener('click', () => {
+            const val = key.innerText;
+            const currentText = textarea.value;
+            const lastChar = currentText.slice(-1);
+
+            if (val === '話す') {
+                executeSpeakAction();
+            } else if (val === '送信') {
+                if (currentText) {
+                    saveToHistory(currentText);
+                    speak(currentText);
+                    
+                    set(ref(db, 'shared/message'), currentText)
+                        .then(() => {
+                            console.log("Firebase送信成功:", currentText);
+                            key.classList.add('key-active');
+                            setTimeout(() => key.classList.remove('key-active'), 300);
+                        })
+                        .catch((error) => {
+                            console.error("Firebase送信エラー:", error);
+                            alert("送信失敗: " + error.message);
+                        });
+
+                    suggestionOverlay.innerHTML = '';
+                }
+            } else if (val === '一字消') {
+                textarea.value = currentText.slice(0, -1);
+                updateSuggestions();
+            } else if (val === '全消去') {
+                textarea.value = '';
+                suggestionOverlay.innerHTML = '';
+            } else if (val === '空白') {
+                textarea.value += ' ';
+            } else if (val === '゛') {
+                if (lastChar && dakutenMap[lastChar]) {
+                    textarea.value = currentText.slice(0, -1) + dakutenMap[lastChar];
+                }
+            } else if (val === '゜') {
+                if (lastChar && handakutenMap[lastChar]) {
+                    textarea.value = currentText.slice(0, -1) + handakutenMap[lastChar];
+                }
+            } else if (val === '小文字') {
+                if (lastChar && smallMap[lastChar]) {
+                    textarea.value = currentText.slice(0, -1) + smallMap[lastChar];
+                }
+            } else if (val.length === 1) {
+                textarea.value += val;
+                updateSuggestions(); 
+            }
+            textarea.scrollTop = textarea.scrollHeight;
+        });
+    });
+}
+
+const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+faceMesh.onResults(onResults);
+
+const camera = new Camera(videoElement, {
+    onFrame: async () => {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        await faceMesh.send({image: videoElement});
+    },
+    width: 1280, height: 720
+});
+camera.start();
+addKeyListeners();
+</script>
+</body>
+</html>
